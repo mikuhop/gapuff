@@ -31,7 +31,7 @@ class met_wrf_source:
             return [60 * (60 - minute), 60 * (120 - minute), 7200]
         else:
             return [3600, 7200]
-        
+
     def generate_met_seq(self):
         if not self.called:
             raise Error("You must call generate_met first before you are calling generate_met_seq")
@@ -90,7 +90,7 @@ class met_wrf_source:
                     hfx = nc_hfx[tick + k, y, x]
                     lh = nc_lh[tick + k, y, x]
                     stab = self.calc_stab(t2, ust, alt, hfx, lh)
-                    assert stab == 6
+                    assert stab == 6 or stab == 1
                     y1 = y - (m - 42)
                     x1 = x - n
                     base_met_matrix[k,y1*base_count:(y1+1)*base_count,x1*base_count:(x1+1)*base_count,0].fill(u10)
@@ -103,7 +103,7 @@ class met_wrf_source:
         return self.met_matrix
 
     def generate_met(self, center, time):
-        
+
         NO_USE_CODE="""
         nc_u10 = self.dataset.variables['U10']
         nc_v10 = self.dataset.variables['V10']
@@ -170,7 +170,7 @@ class met_wrf_source:
             return 6
         else:
             raise Error("Incorrect stability")
-            
+
     def find_grid_index(self, pos, ref=None, full=False):
         """function that return nearest point"""
         dis = numpy.inf; m = -1; n = -1

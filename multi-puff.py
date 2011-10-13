@@ -93,10 +93,7 @@ class model_puff_core:
     def run_contour(self, height_in=1):
         self.smoke_list = []
         self.result_list = []
-        try:
-            return self.run_core_contour(height_in)
-        except:
-            return self.run_gpu_contour(height_in)
+        return self.run_core_contour(height_in)
 
     def run_core_contour(self, height_in=1):
         tick = 0
@@ -109,7 +106,7 @@ class model_puff_core:
                 #表示此刻有无烟团释放
                 if self.release[tick] > 0:
                     #加入烟团list
-                    self.smoke_list.append(smoke_def(self.release[tick], self.met_field, self.met_seq, tick))
+                    self.smoke_list.append(smoke_def(self.release[tick], self.met_field, self.met_seq, tick, pos=(0.0, 0.0, height_in)))
             #追踪当前每个烟团的位置，并且计算浓度场
             if cuda_disabled: #CPU Func
                 empty_conc_matrix = numpy.zeros_like(CentralPositionMatrixX)
@@ -160,21 +157,21 @@ class model_puff_core:
         height = height_in
         #Total Estimation Time is DURATION seconds
         while tick * TIMESTEP < DURATION:
-            if (not ticks == None and tick in ticks) in (ticks == None and tick % OUTSTEP == 0):
+            if (not ticks is None and tick in ticks) or (ticks is None and tick % OUTSTEP == 0):
                 print "current time-tick is %d" % tick
             #判断烟团释放过程是否结束
             if tick < len(self.release):
                 #表示此刻有无烟团释放
                 if self.release[tick] > 0:
                     #加入烟团list
-                    self.smoke_list.append(smoke_def(self.release[tick], self.met_field, self.met_seq, tick))
+                    self.smoke_list.append(smoke_def(self.release[tick], self.met_field, self.met_seq, tick, pos=(0.0, 0.0, height_in)))
             #追踪当前每个烟团的位置，并且计算浓度场
             diffc = []; mass = []; stab = []; pos = [];
             for smoke in self.smoke_list:
                 if not smoke.invalid:
                     smoke.walk()
                 #只有当需要输出的时刻才计算浓度场
-                if (not ticks == None and tick in ticks) or (ticks == None and not smoke.invalid and tick % OUTSTEP == 0):
+                if (not ticks is None and tick in ticks) or (ticks is None and not smoke.invalid and tick % OUTSTEP == 0):
                     pos += list(smoke.pos)
                     smoke.diffusion_coefficents(int(smoke.met[3]), smoke.walkinglength, smoke.windspeed)
                     diffc += list(smoke.diffc)
@@ -205,7 +202,7 @@ def plot_debug(result):
 
 if __name__ == '__main__':
     #读取输入数据
-    testmet = source_main.MetPreProcessor(mode=0, simple=True)
+    testmet = source_main.MetPreProcessor(mode=1, simple=True, dataset='wrfout.ncf')
     testsrc = source_main.SourcePreProcessor()
 
     print "Reading source data"
@@ -221,7 +218,7 @@ if __name__ == '__main__':
     print len(result_list)
     print datetime.datetime.now() - startcpu
 
-    plot_debug(result_list[20])
+    plot_debug(result_list[14])
     print "PROGRAM END"
 
 

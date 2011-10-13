@@ -28,7 +28,7 @@ class smoke_def:
 
     def expand_seq(self, metsequence):
         met_seq = []
-        for tick in xrange(720):
+        for tick in xrange(DURATION // TIMESTEP):
             for i in range(len(metsequence)):
                 if tick * TIMESTEP < metsequence[i]:
                     break
@@ -37,19 +37,17 @@ class smoke_def:
 
     def extract_met_conditions(self, tick, pos):
         """Extract the met-conditions at given postion and time-tick"""
-        x, y, z = pos
-        GridIdxX = int(x // GRID_INTERVAL) + GRID_SIZE // 2
-        GridIdxY = int(y // GRID_INTERVAL) + GRID_SIZE // 2
         try:
-            #修正风廓线
+            x, y, z = pos
+            GridIdxX = int(x // GRID_INTERVAL) + GRID_SIZE // 2
+            GridIdxY = int(y // GRID_INTERVAL) + GRID_SIZE // 2
             virtualmet = self.met_matrix[self.met_seq[tick], GridIdxX, GridIdxY]
             stab = virtualmet[3]
-            virtualmet[0] = virtualmet[0] * (z / 10.0) ** windprofile.rural[int(stab)]
-            virtualmet[1] = virtualmet[1] * (z / 10.0) ** windprofile.rural[int(stab)]
+            uspeed = virtualmet[0] * (z / 10.0) ** windprofile.urban[int(stab) - 1]
+            vspeed = virtualmet[1] * (z / 10.0) ** windprofile.urban[int(stab) - 1]
             self.windspeed = math.sqrt(virtualmet[0] ** 2 + virtualmet[1] ** 2)
-            return virtualmet
+            return [uspeed, vspeed, 0, stab]
         except:
-            #The smoke had moved out of range
             return None
 
     def walk(self):
@@ -83,7 +81,8 @@ class smoke_def:
         assert speed > 0
         dist_x, dist_z = walkinglength
         try:
-            is1 = istab[stab]
+            is1 = istab[stab - 1]
+            is1 = is1 - 1
             if speed > 1.5:
                 if dist_x > 1000:
                     sigy = normalwind.r12[is1]*dist_x**normalwind.a12[is1]
@@ -126,7 +125,8 @@ class smoke_def:
         sigz = DiffC[2]
         istab = (1,2,4,6,8,9)
         try:
-            is1 = istab[stab]
+            is1 = istab[stab - 1]
+            is1 = is1 - 1
             if speed > 1.5:
                 dist_x = (sigy / normalwindr12[is1]) ** (1 / normalwind.a12[is1])
                 if dist_x < 1000:
@@ -179,7 +179,7 @@ class smallwind:
 
 class windprofile:
     rural = (0.07, 0.07, 0.10, 0.15, 0.35, 0.55)
-    urban = (0.15, 0.15, 0.20, 0.25, 0.30, 0.30)
+    urban = (0.10, 0.15, 0.20, 0.25, 0.30, 0.30)
 
 #Global functions
 def GetDiffusionFactors(stab, walk, speed):

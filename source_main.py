@@ -10,9 +10,10 @@ import datetime
 
 class MetPreProcessor:
     u"""前处理气象数据产生所需要的气象场"""
-    def __init__(self, mode=1, simple=False):
+    def __init__(self, mode=1, simple=False, dataset="wrfout.ncf"):
         self.mode = mode
         self.simple = simple
+        self.dataset = dataset
         pass
 
     # 模式II是假设，气象数据是从SAM上获取的历史记录，这个时候是每10分钟一次的均值
@@ -25,7 +26,7 @@ class MetPreProcessor:
 
     def GenerateTestFieldMode1(self, center = None):
         import source_wrf
-        met_source = source_wrf.met_wrf_source('wrfout.ncf')
+        met_source = source_wrf.met_wrf_source(self.dataset)
         accident_time = datetime.datetime(2011, 1, 21, 12)
         if center is None and __debug__:
             center = (348013.93273281929, 3471433.9195643286)
@@ -33,17 +34,17 @@ class MetPreProcessor:
             raise Error("position cannot be blank in release mode")
         self.met_field = met_source.generate_met(center, accident_time)
         self.met_seq = met_source.generate_met_seq()
-        pass
+        return self.met_field
 
     def GenerateTestFieldSeq(self):
         return self.met_seq
 
     def GenerateConstantTestField(self):
         self.met_field = np.zeros((1, GRID_SIZE, GRID_SIZE, 4))
-        self.met_field[0,:,:,0].fill(2.17)
+        self.met_field[0,:,:,0].fill(3)
         self.met_field[0,:,:,1].fill(0)
         self.met_field[0,:,:,2].fill(0)
-        self.met_field[0,:,:,3].fill(2)
+        self.met_field[0,:,:,3].fill(3)
         self.met_seq = [7200]
         return self.met_field
 
@@ -96,8 +97,8 @@ class SourcePreProcessor:
     def GenerateTestSource(self):
         #Generate a test-source: Constant release of 2t materials during 30min.
         result = []
-        BASEFACTOR = 2.0e9 / 180
-        for i in xrange(0,180):
+        BASEFACTOR = 4.0e9 / 360
+        for i in xrange(0,360):
             result.append(BASEFACTOR)
         return result
 
