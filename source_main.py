@@ -44,7 +44,7 @@ class MetPreProcessor:
         self.met_field[0,:,:,0].fill(3)
         self.met_field[0,:,:,1].fill(0)
         self.met_field[0,:,:,2].fill(0)
-        self.met_field[0,:,:,3].fill(3)
+        self.met_field[0,:,:,3].fill(4)
         self.met_seq = [7200]
         return self.met_field
 
@@ -97,8 +97,8 @@ class SourcePreProcessor:
     def GenerateTestSource(self):
         #Generate a test-source: Constant release of 2t materials during 30min.
         result = []
-        BASEFACTOR = 4.0e9 / 360
-        for i in xrange(0,360):
+        BASEFACTOR = 1300.0e9 / 18
+        for i in xrange(0,18):
             result.append(BASEFACTOR)
         return result
 

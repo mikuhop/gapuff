@@ -12,7 +12,7 @@ class smoke_def:
         self.met_matrix = metconditions
         self.met_seq = self.expand_seq(metsequence)
         #Current position and Last-tick position. A smoke always starts from self.pos
-        self.pos = pos
+        self.pos = list(pos)
         if self.pos[2] <= 0:
             self.pos[2] = 0.01
         self.last_pos = None
