@@ -43,6 +43,8 @@ import source_main
 try:
     import gpu_core
     from gpu_core import run_gpu_conc
+    import gpu_core2
+    from gpu_core2 import run_gpu_conc_point
 except:
     cuda_disabled = True
     if __debug__:
@@ -69,9 +71,8 @@ class model_puff_core:
         self.met_seq = met_seq
         self.smoke_list = []
         self.result_list = []
+        self.recepter_height = 1.0
 
-
-#########################ENVELOP###############################
     def run_envelop(self, loc, height=1):
         if len(loc) == 0:
             raise Error("You must specify LOC values to calculate envelop")
@@ -80,29 +81,31 @@ class model_puff_core:
                 raise Error("LOC value < 0?!")
         self.loc = loc
         return self.run_core_contour(loc=loc, height_in=height, envelop=True)
-#########################END OF ENVELOP########################
 
-#########################GIVEN_TIMES###########################
     def run_core_time(self, time_list, height_in=1):
         """time_list is the list of REAL time, NOT ticks"""
         tick_list = []
         for t in time_list:
             tick_list.append(t // TIMESTEP)
         return self.run_core_contour(self, height_in=height_in, ticks=ticks)
-#########################END OF GIVEN_TIMES#####################
 
-#########################CONTOUR################################
     def run_contour(self, height_in=1):
         self.smoke_list = []
         self.result_list = []
         return self.run_core_contour(height_in)
 
-    def run_core_contour(self, height_in=1, envelop=False, ticks=None, loc=[]):
+    def run_core_contour(self, height_in=1, envelop=False, ticks=None, loc=[], force_no_debug=False):
+        """Three modes are defined in core_contour funtion:
+1 contour mode [default] -> compute contours every tick
+2 given time mode [set ticks parameter] -> only compute contours at given ticks
+3 envelop mode [set envelop=True and give LOCs] -> override Mode 1 and 2, compute contours in Mode 1 and generate envelops based on given LOCs
+        """
+        self.output_tick = []
         tick = 0
         #Total Estimation Time is DURATION seconds
         while tick * TIMESTEP < DURATION:
-            if __debug__:
-                if ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0)):
+            if ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0)):
+                if __debug__ and (not force_no_debug):
                     print "current time-tick is %d" % tick
             #判断烟团释放过程是否结束
             if tick < len(self.release):
@@ -126,10 +129,14 @@ class model_puff_core:
                         diffc = smoke.diffusion_coefficents(stability, smoke.walkinglength, smoke.windspeed)
                         x, z = diffc; y = x
                         PI = math.pi
-                        height = 1.0
+                        height = self.recepter_height
                         current_smoke_conc = ne.evaluate("mass/((2*PI)**1.5*x*y*z)*exp(-0.5*((CentralPositionMatrixX-X)/x)**2)*exp(-0.5*((CentralPositionMatrixY-Y)/y)**2)*(exp(-0.5*((Z-height)/z)**2) + exp(-0.5*((Z+height)/z)**2))")
                         empty_conc_matrix = ne.evaluate("empty_conc_matrix + current_smoke_conc")
+                    else:
+                        tick += 1
+                        continue
                 self.result_list.append(empty_conc_matrix)
+                self.output_tick.append(tick)
             else: #GPU Func
                 diffc = []; mass = []; stab = []; pos = [];
                 for smoke in self.smoke_list:
@@ -146,9 +153,10 @@ class model_puff_core:
                     tick += 1
                     continue
                 dest = run_gpu_conc(pos=numpy.array(pos).astype(numpy.float32), diffc=numpy.array(diffc).astype(numpy.float32), mass=numpy.array(mass).astype(numpy.float32),
-                                            height=1.0, GRID_WIDTH=GRID_SIZE, gridw=GRID_INTERVAL, smoke_count=len(mass))
+                                            height=self.recepter_height, GRID_WIDTH=GRID_SIZE, gridw=GRID_INTERVAL, smoke_count=len(mass))
                 empty_conc_matrix = dest.reshape((GRID_SIZE,GRID_SIZE), order='C')
                 self.result_list.append(empty_conc_matrix)
+                self.output_tick.append(tick)
             #时钟+1
             tick += 1
             if envelop:
@@ -163,54 +171,49 @@ class model_puff_core:
             base = ne.evaluate("base+where(r>loc, 1, 0)")
         return base
 
-
     def run_gpu_contour(self, height_in=1, envelop=False, ticks=None, loc=[]):
-        NOUSECODE="""
+        raise Error("Use run_core_contour instead!")
+
+    def run_point(self, point=[10.0,10.0,1.0], height_in=1.0, ticks=None, force_no_debug=False, envelop=False):
+        """This function calculate concenrations at ONE given point. Note that point is real position, NOT grid index.
+envelop will override ticks so will force computing regular ticks.
+        """
         tick = 0
-        #做一点赋值，方便调试
-        gridw = GRID_INTERVAL
-        GRID_WIDTH = GRID_SIZE
-        height = height_in
-        #Total Estimation Time is DURATION seconds
+        self.output_tick = []
+        smoke_countlist = []; diffc = []; mass = []; pos = [];
+        smoke_count = 0
         while tick * TIMESTEP < DURATION:
-            if __debug__:
-                if (not ticks is None and tick in ticks) or (ticks is None and tick % OUTSTEP == 0):
-                    print "current time-tick is %d" % tick
             #判断烟团释放过程是否结束
             if tick < len(self.release):
                 #表示此刻有无烟团释放
                 if self.release[tick] > 0:
                     #加入烟团list
                     self.smoke_list.append(smoke_def(self.release[tick], self.met_field, self.met_seq, tick, pos=(0.0, 0.0, height_in)))
-            #追踪当前每个烟团的位置，并且计算浓度场
-            diffc = []; mass = []; stab = []; pos = [];
+            if ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0)):
+                if __debug__ and (not force_no_debug):
+                    print "current time-tick is %d" % tick
+                self.output_tick.append(tick)
             for smoke in self.smoke_list:
                 if not smoke.invalid:
                     smoke.walk()
                 #只有当需要输出的时刻才计算浓度场
-                if (not ticks is None and tick in ticks) or (ticks is None and not smoke.invalid and tick % OUTSTEP == 0):
+                if ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0)):
+                    smoke_count += 1
                     pos += list(smoke.pos)
+                    #计算扩散系数
                     smoke.diffusion_coefficents(int(smoke.met[3]), smoke.walkinglength, smoke.windspeed)
                     diffc += list(smoke.diffc)
                     mass.append(smoke.mass)
-            if len(mass) == 0:
-                tick += 1
-                continue
-            dest = gpu_core.run_gpu_conc(pos=numpy.array(pos).astype(numpy.float32), diffc=numpy.array(diffc).astype(numpy.float32), mass=numpy.array(mass).astype(numpy.float32),
-                                        height=height, GRID_WIDTH=GRID_WIDTH, gridw=gridw, smoke_count=len(mass))
-            #TODO: 用numexpr来计算包络线
-            for loc in self.loc:
-                pass
-            empty_conc_matrix = dest.reshape((GRID_SIZE,GRID_SIZE), order='C')
-            self.result_list.append(empty_conc_matrix)
-            #时钟+1
+            if ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0)):
+                smoke_countlist.append(smoke_count)
             tick += 1
-        return 0"""
-        raise Error("Use run_core_contour instead!")
-#########################END OF CONTOUR###############################
-
+        assert len(mass) == smoke_countlist[-1]
+        dest = run_gpu_conc_point(numpy.array(point).astype(numpy.float32), numpy.array(pos).astype(numpy.float32), numpy.array(diffc).astype(numpy.float32), numpy.array(mass).astype(numpy.float32), numpy.array(smoke_countlist).astype(numpy.int32), len(smoke_countlist))
+        self.point_list = dest;
+        return 0
 
 def plot_debug(result):
+    import pylab
     from pylab import *
     contours = (70.9/22.4, 70.9/22.4*3, 70.9/22.4*20)
     contour(result, contours)
@@ -218,32 +221,6 @@ def plot_debug(result):
     show()
 
 
-if __name__ == '__main__':
-    #读取输入数据
-    testmet = source_main.MetPreProcessor(mode=0, simple=True, dataset='wrfout.ncf')
-    testsrc = source_main.SourcePreProcessor()
-
-    print "Reading source data"
-    ReleaseQ = testsrc.GenerateTestSource()
-    print "Reading met data"
-    MetField = testmet.GenerateTestField()
-    print "Reading met sequence"
-    MetSeq = testmet.GenerateTestFieldSeq()
-    model = model_puff_core(ReleaseQ, MetField, MetSeq)
-    startcpu = datetime.datetime.now()
-    if model.run_contour(height_in=1) == 0:
-        result_list = model.result_list
-    print len(result_list)
-    print datetime.datetime.now() - startcpu
-    import pylab
-    pylab.matshow(model.make_envelop(result_list, 5000 * 32 / 22.4))
-    pylab.show()
-    #plot_debug(result_list[14])
-    #temp = []
-    #for r in result_list:
-    #    temp.append(r[512,540])
-    #tempout = numpy.array(temp).astype(numpy.float32)
-    #numpy.save('tt1', tempout)
 
 
 
