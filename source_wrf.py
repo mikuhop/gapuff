@@ -103,53 +103,6 @@ class met_wrf_source:
         return self.met_matrix
 
     def generate_met(self, center, time):
-
-        NO_USE_CODE="""
-        nc_u10 = self.dataset.variables['U10']
-        nc_v10 = self.dataset.variables['V10']
-        nc_t2 = self.dataset.variables['T2']
-        nc_ust = self.dataset.variables['UST']
-        nc_alt = self.dataset.variables['ALT']
-        nc_hfx = self.dataset.variables['HFX']
-        nc_lh = self.dataset.variables['LH']
-        dataset = self.dataset
-        #convert to UTC timestamp
-        utc_time = time - datetime.timedelta(seconds=3600*8)
-        #NOTE: WRF的时刻是从UTC的昨天0点到明天0点，所以啊当前时刻需要+24
-        tick = utc_time.hour + 24
-        minute = utc_time.minute
-        if minute == 0:
-            self.met_matrix = numpy.empty((2, GRID_SIZE, GRID_SIZE, 4))
-        else:
-            self.met_matrix = numpy.empty((3, GRID_SIZE, GRID_SIZE, 4))
-        for y in xrange(self.height):
-            for x in xrange(self.width):
-                self.xlong[y,x], self.xlat[y,x] = p(self.xlong_orig[y,x], self.xlat_orig[y,x])
-        if __debug__ and center is None:
-            start_pos = [self.xlong[0,0] + GRID_INTERVAL/2, self.xlat[65,0] - GRID_INTERVAL/2] #left-top corner
-        else:
-            start_pos = [center[0] - GRID_SIZE / 2 * GRID_INTERVAL + GRID_INTERVAL / 2, center[1] + GRID_SIZE / 2 * GRID_INTERVAL - GRID_INTERVAL / 2]
-        lm = self.met_matrix.shape[0]
-        #scan the met-matrix to extract value.
-        for i in xrange(GRID_SIZE):                 #row index -> y
-            for j in xrange(GRID_SIZE):             #column index -> x
-                m, n = self.find_grid_index([start_pos[0] + GRID_INTERVAL * j, start_pos[1] - GRID_INTERVAL * i], None, False)
-                for k in xrange(lm):
-                    u10 = nc_u10[tick + k, m, n]
-                    v10 = nc_v10[tick + k, m, n]
-                    t2 = nc_t2[tick + k, m, n]
-                    ust = nc_ust[tick + k, m, n]
-                    alt = nc_alt[tick + k, 0, m, n]
-                    hfx = nc_hfx[tick + k, m, n]
-                    lh = nc_lh[tick + k, m, n]
-                    stab = self.calc_stab(t2, ust, alt, hfx, lh)
-                    #assert stab == 6
-                    grid = self.met_matrix[k,j,i]
-                    grid[0] = u10; grid[1] = v10; grid[2] = 0; grid[3] = stab
-            if __debug__:
-                print "row count =", i
-        self.met_seq = self.generate_met_seq(minute)
-        return self.met_matrix, self.met_seq"""
         return self.generate_met_simple(center, time)
 
     def calc_stab(self, t2, ust, alt, hfx, lh):
@@ -174,16 +127,6 @@ class met_wrf_source:
     def find_grid_index(self, pos, ref=None, full=False):
         """function that return nearest point"""
         dis = numpy.inf; m = -1; n = -1
-        NO_USE_CODE="""
-        if False:
-            for y in xrange(self.height):
-                for x in xrange(self.width):
-                    dis1 = (self.xlong[y,x]-pos[0])**2 + (self.xlat[y,x]-pos[1])**2
-                    if dis1 < dis:
-                        dis = dis1
-                        m = x
-                        n = y
-            return [n, m]"""
         #Quick Search
         for y in xrange(self.height):
             row_min = numpy.inf
@@ -200,14 +143,5 @@ class met_wrf_source:
             else:
                 break
         return [n, m]
-
-if __name__ == "__main__":
-    width = GRID_SIZE; height = GRID_SIZE
-    if __debug__:
-        a = met_wrf_source()
-        met = a.generate_met(None, datetime.datetime.now())
-        seq = a.generate_met_seq()
-        print met.shape
-        print seq
 
 

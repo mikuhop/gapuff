@@ -47,7 +47,7 @@ __global__ void get_gpu_conc(float *dest,           //concentration [out, width*
 	float y = gridw * halfw - 0.5f * gridw - j * gridw;
 	for(int q = 0; q < smoke_count; q++)
 	{
-		float temp_conc = mass[q] / (pow(2*PI, 1.5f)*diffc[2*q]*diffc[2*q]*diffc[2*q+1]) * exp(-0.5*pow((x - pos[3*q])/diffc[2*q],2)) * exp(-0.5*pow((y - pos[3*q+1])/diffc[2*q],2)) * (exp(-0.5*pow((pos[3*q+2] - height)/diffc[2*q+1],2)) + exp(-0.5*pow((pos[3*q+2] + height)/diffc[2*q+1],2)));
+		float temp_conc = mass[q] / (pow(2*PI, 1.5f)*diffc[2*q]*diffc[2*q]*diffc[2*q+1]) * exp(-0.5f*pow((x - pos[3*q])/diffc[2*q],2)) * exp(-0.5f*pow((y - pos[3*q+1])/diffc[2*q],2)) * (exp(-0.5f*pow((pos[3*q+2] - height)/diffc[2*q+1],2)) + exp(-0.5f*pow((pos[3*q+2] + height)/diffc[2*q+1],2)));
 		if(q == 0)	dest[n] = temp_conc;
 		else		dest[n] += temp_conc;
 	}
@@ -56,7 +56,7 @@ __global__ void get_gpu_conc(float *dest,           //concentration [out, width*
 
 get_gpu_conc = mod.get_function("get_gpu_conc")
 
-block_size = 32
+block_size = 16
 
 def run_gpu_conc(pos, diffc, mass, height, GRID_WIDTH, gridw, smoke_count):
     dest = numpy.zeros(GRID_WIDTH*GRID_WIDTH).astype(numpy.float32)

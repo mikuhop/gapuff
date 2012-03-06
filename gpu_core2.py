@@ -16,15 +16,15 @@ mod = SourceModule("""
 __constant__ float PI = 3.1415926535;
 
 __global__ void get_gpu_conc_point(float *dest,     //concentration [out, count=smoke_group]
-                             float *point,          //concentration [in, given (x,y,z) to compute concentrations, 3]
-							 float *pos,            //center (x,y,z) positions of all smokes at all ticks. [in, varied count]
-							 float *diffc,          //diffusion coefficents of x,z of all smokes at all ticks. [in, varied count]
-							 float *mass,           //mass of all smokes at all ticks [in, varied count. NOTE: pos,diffc,mass have same count]
-                             int *smoke_count,      // accumulated count of smokes in each group[in, smoke_group]
-							 int smoke_group        //count of groups of smokes [in, it should always be 720 in current version]
-							 )
+                         float *point,          //concentration [in, given (x,y,z) to compute concentrations, 3]
+                         float *pos,            //center (x,y,z) positions of all smokes at all ticks. [in, varied count]
+                         float *diffc,          //diffusion coefficents of x,z of all smokes at all ticks. [in, varied count]
+                         float *mass,           //mass of all smokes at all ticks [in, varied count. NOTE: pos,diffc,mass have same count]
+                         int *smoke_count,      // accumulated count of smokes in each group[in, smoke_group]
+                         int smoke_group        //count of groups of smokes [in, it should always be 720 in current version]
+                         )
 {
-	int n = blockDim.x * blockIdx.x + threadIdx.x;
+    int n = blockDim.x * blockIdx.x + threadIdx.x;
     if(n > smoke_group)
         return;
     int start, end;
@@ -42,7 +42,7 @@ __global__ void get_gpu_conc_point(float *dest,     //concentration [out, count=
         return;
 	for(int q = start; q < end; q++)
 	{
-		float temp_conc = mass[q] / (pow(2*PI, 1.5f)*diffc[2*q]*diffc[2*q]*diffc[2*q+1]) * exp(-0.5*pow((point[0] - pos[3*q])/diffc[2*q],2)) * exp(-0.5*pow((point[1] - pos[3*q+1])/diffc[2*q],2)) * (exp(-0.5*pow((pos[3*q+2] - point[2])/diffc[2*q+1],2)) + exp(-0.5*pow((pos[3*q+2] + point[2])/diffc[2*q+1],2)));
+		float temp_conc = mass[q] / (pow(2*PI, 1.5f)*diffc[2*q]*diffc[2*q]*diffc[2*q+1]) * exp(-0.5f*pow((point[0] - pos[3*q])/diffc[2*q],2)) * exp(-0.5f*pow((point[1] - pos[3*q+1])/diffc[2*q],2)) * (exp(-0.5f*pow((pos[3*q+2] - point[2])/diffc[2*q+1],2)) + exp(-0.5f*pow((pos[3*q+2] + point[2])/diffc[2*q+1],2)));
 		if(q == start)
         {
             dest[n] = temp_conc;
