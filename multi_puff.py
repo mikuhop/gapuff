@@ -99,13 +99,15 @@ Three modes are defined in core_contour funtion:
 2 given time mode [set ticks parameter] -> only compute contours at given ticks
 3 envelop mode [set envelop=True and give LOCs] -> override Mode 1 and 2, compute contours in Mode 1 and generate envelops based on given LOCs
         """
+        def bOutput():
+            return ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0))
+
         self.isRunning = True
         self.output_tick = []
         tick = 0
         #Total Estimation Time is DURATION seconds
         while tick * TIMESTEP < DURATION:
-            if ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0)):
-                if __debug__ and (not force_no_debug):
+            if bOutput() and __debug__ and (not force_no_debug):
                     print "current time-tick is %d" % tick
             #判断烟团释放过程是否结束
             if tick < len(self.release):
@@ -116,59 +118,53 @@ Three modes are defined in core_contour funtion:
             #追踪当前每个烟团的位置，并且计算浓度场
             #CPU Func
             if cuda_disabled or CoreMode != 'gpu':
-                empty_conc_matrix = numpy.zeros_like(CentralPositionMatrixX)
                 for smoke in self.smoke_list:
                     if not smoke.invalid:
                         smoke.walk()
-                    #只有当需要输出的时刻才计算浓度场
-                    if ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0)):
-                        #Prepare some variables used in numexpr.evaluate
-                        X, Y, Z = smoke.pos
-                        stability = int(smoke.met[3])
-                        mass = smoke.mass
-                        #计算扩散系数
-                        diffc = smoke.diffusion_coefficents(stability, smoke.walkinglength, smoke.windspeed)
-                        x, z = diffc; y = x
-                        PI = math.pi
-                        height = self.recepter_height
-                        #if not USEPSYCO:
-                        current_smoke_conc = numexpr.evaluate("mass/((2*PI)**1.5*x*y*z)*exp(-0.5*((CentralPositionMatrixX-X)/x)**2)*exp(-0.5*((CentralPositionMatrixY-Y)/y)**2)*(exp(-0.5*((Z-height)/z)**2) + exp(-0.5*((Z+height)/z)**2))")
-                        empty_conc_matrix = numexpr.evaluate("empty_conc_matrix + current_smoke_conc")
-                        #else:
-                        #    current_smoke_conc = mass/((2*PI)**1.5*x*y*z)*numpy.exp(-0.5*((CentralPositionMatrixX-X)/x)**2)*numpy.exp(-0.5*((CentralPositionMatrixY-Y)/y)**2)*(exp(-0.5*((Z-height)/z)**2) + exp(-0.5*((Z+height)/z)**2))
-                        #    empty_conc_matrix = empty_conc_matrix + current_smoke_conc
-                    else:
-                        tick += 1
-                        continue
-                self.result_list.append(empty_conc_matrix)
-                self.output_tick.append(tick)
+                #只有当需要输出的时刻才计算浓度场
+                if bOutput():
+                    empty_conc_matrix = numpy.zeros_like(CentralPositionMatrixX)
+                    for smoke in self.smoke_list:
+                        if not smoke. invalid:
+                            #Prepare some variables used in numexpr.evaluate
+                            X, Y, Z = smoke.pos
+                            stability = int(smoke.met[3])
+                            mass = smoke.mass
+                            #计算扩散系数
+                            diffc = smoke.diffusion_coefficents(stability, smoke.walkinglength, smoke.windspeed)
+                            x, z = diffc; y = x
+                            PI = math.pi
+                            height = self.recepter_height
+                            current_smoke_conc = numexpr.evaluate("mass/((2*PI)**1.5*x*y*z)*exp(-0.5*((CentralPositionMatrixX-X)/x)**2)*exp(-0.5*((CentralPositionMatrixY-Y)/y)**2)*(exp(-0.5*((Z-height)/z)**2) + exp(-0.5*((Z+height)/z)**2))")
+                            empty_conc_matrix = numexpr.evaluate("empty_conc_matrix + current_smoke_conc")
+                    self.result_list.append(empty_conc_matrix)
+                    self.output_tick.append(tick)
             #GPU Func
             else:
                 diffc = []; mass = []; stab = []; pos = [];
                 for smoke in self.smoke_list:
                     if not smoke.invalid:
                         smoke.walk()
-                    #只有当需要输出的时刻才计算浓度场
-                    if ((not envelop) and (not ticks is None) and (tick in ticks)) or ((ticks is None or envelop) and (tick % OUTSTEP == 0)):
-                        pos += list(smoke.pos)
-                        #计算扩散系数
-                        smoke.diffusion_coefficents(int(smoke.met[3]), smoke.walkinglength, smoke.windspeed)
-                        diffc += list(smoke.diffc)
-                        mass.append(smoke.mass)
-                if len(mass) == 0:
-                    tick += 1
-                    continue
-                dest = run_gpu_conc(pos=numpy.array(pos).astype(numpy.float32), diffc=numpy.array(diffc).astype(numpy.float32), mass=numpy.array(mass).astype(numpy.float32),
-                                            height=self.recepter_height, GRID_WIDTH=GRID_SIZE, gridw=GRID_INTERVAL, smoke_count=len(mass))
-                empty_conc_matrix = dest.reshape((GRID_SIZE,GRID_SIZE), order='C')
-                self.result_list.append(empty_conc_matrix)
-                self.output_tick.append(tick)
+                        #只有当需要输出的时刻才计算浓度场
+                        if bOutput():
+                            pos += list(smoke.pos)
+                            #计算扩散系数
+                            smoke.diffusion_coefficents(int(smoke.met[3]), smoke.walkinglength, smoke.windspeed)
+                            diffc += list(smoke.diffc)
+                            mass.append(smoke.mass)
+                if len(mass) != 0:
+                    dest = run_gpu_conc(pos=numpy.array(pos).astype(numpy.float32), diffc=numpy.array(diffc).astype(numpy.float32), mass=numpy.array(mass).astype(numpy.float32),
+                                                height=self.recepter_height, GRID_WIDTH=GRID_SIZE, gridw=GRID_INTERVAL, smoke_count=len(mass))
+                    empty_conc_matrix = dest.reshape((GRID_SIZE,GRID_SIZE), order='C')
+                    self.result_list.append(empty_conc_matrix)
+                    self.output_tick.append(tick)
             #时钟+1
             tick += 1
-            if envelop:
-                self.envelop_list = []
-                for l in loc:
-                    self.envelop_list.append(self.make_envelop(self.result_list, l))
+#==================END OF THE LOOP=========================
+        if envelop:
+            self.envelop_list = []
+            for l in loc:
+                self.envelop_list.append(self.make_envelop(self.result_list, l))
         self.isRunning = False
         return 0
 
@@ -178,10 +174,6 @@ Three modes are defined in core_contour funtion:
         for r in result_list:
             base = numexpr.evaluate("base+where(r>loc, 1, 0)")
         return base
-
-    #废弃的函数
-    def run_gpu_contour(self, height_in=1, envelop=False, ticks=None, loc=[]):
-        raise Error("Use run_core_contour instead!")
 
     #计算指定点的浓度
     def run_point(self, point=[10.0,10.0,1.0], height_in=1.0, ticks=None, force_no_debug=False, envelop=False):
