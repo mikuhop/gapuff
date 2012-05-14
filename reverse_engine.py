@@ -1,12 +1,12 @@
 #coding=utf8
-import os, sys
+import os, sys, logging
 os.environ["CUDA_PROFILE"] = "1"
 os.environ["CUDA_DEVICE"] = "0"
 
 import global_settings
 import multi_puff; from multi_puff import model_puff_core
 
-import source_main
+import input_info
 
 import copy
 import datetime
@@ -18,8 +18,8 @@ import numpy, math, random
 
 from monitor import monitor
 
-class reverse_engine:
-
+class reverse_engine:    
+    
     def __init__(self):
         self.source = []
         self.monitors = []
@@ -28,6 +28,16 @@ class reverse_engine:
         self.ignore_low_value = True
         self.default_step = (1, 1.0e6)
         self.end_step = (1, 1.0e3)
+        self.mpilog = self.__initlog("MPI")
+        self.samplerlog = self.__initlog("Sampler")
+        
+    def __initlog(self, name):
+        logger = logging.getLogger(name)
+        logger.setLevel(global_settings.LOGLEVEL)
+        ch = logging.StreamHandler(sys.stderr)
+        ch.setFormatter(logging.Formatter(global_settings.LOGFORMAT))
+        logger.addHandler(ch)
+        return logger
 
     def narrowdown(self, searchstep):
         if searchstep <= self.end_step:
@@ -37,50 +47,50 @@ class reverse_engine:
         return (timestep, valuestep)
 
     def read_file_input(self):
-        #Read Met
-        testmet = source_main.MetPreProcessor(mode=global_settings.MET_FORMAT, simple=bool(global_settings.METTEST), dataset=global_settings.METFILE)
-        MetField = testmet.GenerateField()
-        #Read MetSeq
-        MetSeq = testmet.Generate_MetSeq()
+        #Read Inputs
+        self.init_src = input_info.source_info(None,(0,0),datetime.datetime.now(),False)
+        self.met = input_info.met_info(self.init_src, mode=global_settings.MET_FORMAT, dataset=global_settings.METFILE, test=bool(global_settings.METTEST)).get_met()
         #Read Reverse settings
         filepath = global_settings.REVERSE_FILES
         if len(filepath) == 0:
             raise Error("[Reverse Engine] ERROR: No input file")
         self.monitor_count = len(filepath)
         #Read all files, one file for one monitor
-        maxvalue = -1; maxtick = None; self.init_tick = -1;
+        maxvalue = -1; maxtick = None
         for f in filepath:
-            t = open(f)
-            str_pos = t.readline().strip().split(',')
+            fp = open(f)
+            str_pos = fp.readline().strip().split(',')
             pos_x, pos_y = int(float(str_pos[0])), int(float(str_pos[1]))
-            str_height = t.readline().strip().split(',')
-            height = float(str_height[0])
-            m = monitor(pos_x, pos_y, height)
-            for line in t.readlines():
-                line1 = line.strip().split(',')
-                ti, va = int(line1[0]), float(line1[1])
+            str_height = fp.readline().strip().split(',')
+            height,sigma = float(str_height[0]), (0.0 if len(str_height) == 1 else float(str_height[1]))
+            m = monitor((pos_x, pos_y, height))
+            for line in fp.readlines():
+                li = line.strip().split(',')
+                ti, va = int(li[0]), float(li[1])
                 if maxvalue < va:
-                    maxvalue = va; maxtick = ti
+                    maxvalue = va
+                    maxtick = ti
                 #If we open IGNORE MODE, all values less than 1.0e-5 will be filtered.
                 if self.ignore_low_value and va <= 1.0e-5:
                     continue
-                m.add_record(ti, va)
-            self.init_tick
-            t.close()
-            m.set_met(MetField, MetSeq)
+                m.record[ti] = va
+            fp.close()
             self.monitors.append(m)
+            
+    def prep_model(self, source, met):
+        src = input_info.source_info(source, None, None, False)
+        return multi_puff.model_puff_core(src, met)
 
-    def sum_error(self, source = None):
-        """probility function"""
-        sum = 0.0
+    def run_model(self, source):
+        model = self.prep_model(source, self.met)        
+        points = map(lambda m: m.position, self.monitors)
+        tick_sets = map(lambda m: set(list(m.record)), self.monitors)
+        ticks = list(set.union(*tick_sets))
+        result = model.run_point(points=points, ticks=ticks, force_no_debug=True)
         for m in self.monitors:
-            m.set_source(source)
-            m.init_model()
-            m.run_model()
-            sum += m.sum_error()
-        #return math.exp(-sum/(2*self.sigma*self.sigma))
-        #TODO: 修正这个分布函数的核，尽管在抽样上来说可以使用这个来代替
-        return sum
+            m.simulate = result[m.position]
+        return sum(map(monitor.targetfunc, self.monitors))
+
 
     def search_best(self, sample, position, step=(1, 1.0e6), searchrange=[], mpi=False):
         """给定sample，搜索position位置上的最佳值"""
@@ -88,198 +98,138 @@ class reverse_engine:
         last_value = None; counter = 0; minvalue = None
         #Search all elements in given range (External MPI Routine)
         if not mpi:
-            try:
-                minvalue = None
-                for searchitem in searchrange:
-                    base_sample[position] = searchitem
-                    source = global_settings.expand_src(base_sample)
-                    value = self.sum_error(source)
-                    if __debug__: print "[Search %d]:" % mpi_rank, datetime.datetime.now(), base_sample, "count=%d" % counter, value
-                    #TODO: 根据不同的分布函数的核，这里不一定是minvalue有可能是maxvalue
-                    if minvalue is None or minvalue > value:
-                        minvalue = value
-                        best = copy.copy(base_sample)
-            except:
-                print sys.exc_info()
+            minvalue = None
+            for searchitem in searchrange:
+                base_sample[position] = searchitem
+                source = global_settings.expand_src(base_sample)
+                value = self.run_model(source)
+                self.mpilog.info("[External MPI=%d]: sample=%s, count=%d, value=%g" % (mpi_rank, str(base_sample), counter, value))
+                #TODO: 根据不同的分布函数的核，这里不一定是minvalue有可能是maxvalue
+                if minvalue is None or minvalue > value:
+                    minvalue = value
+                    best = copy.copy(base_sample)
         #An unlimited search (Internal MPI Routine)
         else:
-            if position == 0:
-                f = step[0]
-                base_sample[position] = 4 + mpi_rank
-            else:
-                f = step[1]
-                base_sample[position] = mpi_rank * f
-            #print "My Rank is", mpi_rank
+            #TODO: 4 is not fixed, should be the length of sample
+            assert position != 0
+            f = step[1] if position else step[0]
+            base_sample[position] = mpi_rank * f if position else 4 + mpi_rank
+            self.mpilog.debug("My Rank is %d" % mpi_rank)
             finished = False
             while not finished:
-                if mpi_size == 1:
-                    source = global_settings.expand_src(base_sample)
-                    value = self.sum_error(source)
-                    #if __debug__: print "[Single Search %d]:" % mpi_rank, datetime.datetime.now(), base_sample, "count=%d" % counter, value
-                    if minvalue is None or minvalue > value:
-                        minvalue = value
-                        best = copy.copy(base_sample)
-                    if minvalue <= value:
-                        counter += 1
-                        if counter > 40:
-                            break;
-                    else:
-                        counter = 0
-                    base_sample[position] += f
-                    last_value = value
-                else:
+                if 1:
                     source1 = global_settings.expand_src(base_sample)
-                    value = self.sum_error(source1)
-                    if __debug__: print "[MPI Search %d]:" % mpi_rank, datetime.datetime.now(), base_sample, "count=%d" % counter, value
+                    value = self.run_model(source1)
+                    self.mpilog.info("[Internal MPI=%d]: sample=%s, count=%d, value=%g" % (mpi_rank, str(base_sample), counter, value))
                     if mpi_rank == 0:   #Master Node
                         valuelist = [(value, base_sample)]
-                        for rank in range(1, mpi_size):
-                            valuelist += [mpi_comm.recv(source=rank, tag=9)]
-                        #if __debug__: print "[MPI Search], valuelist=", valuelist
-                        for value1, base_sample1 in valuelist:
-                            if minvalue is None or minvalue > value1:
-                                minvalue = value1
-                                best = copy.copy(base_sample1)
-                            if minvalue < value1:
-                                counter += 1
-                                if counter > 40:
-                                    finished = True
-                            else:
-                                counter = 0
-                            last_value = value1
-                    else:               #Slave Node
+                        valuelist += map(lambda r: mpi_comm.recv(source=r, tag=9), range(1, mpi_size))
+                        #for rank in range(1, mpi_size):
+                        #    valuelist += [mpi_comm.recv(source=rank, tag=9)]
+                        self.mpilog.debug("[MPI Search], valuelist=%s" % str(valuelist))
+                        for value_slave, base_sample_slave in valuelist:
+                            if minvalue is None or minvalue > value_slave:
+                                minvalue = value_slave
+                                best = copy.copy(base_sample_slave)
+                            counter = (counter+1) if minvalue < value_slave else 0
+                            if counter > 40:
+                               finished = True
+                    else:   #Slave Node
                         mpi_comm.send((value, base_sample), dest=0, tag=9)
                     base_sample[position] += mpi_size * f
                     finished = mpi_comm.bcast(finished, root=0)
                     mpi_comm.barrier();
-                    if position == 0 and base_sample[position] >= 720:
-                        break;
+                    #if position == 0 and base_sample[position] >= 720:
+                    #    break;
         return (best, minvalue)
 
     #search engine
-    def gibbs_test(self, ref=[], initstep=(1,1.0e6)):
+    def gibbs_test(self, ref=[], initstep=(1,1.0e6), preset=360):
         u"""用Gibbs抽样直接来描述一下这个过程"""
         finished = False
-        if not isinstance(ref, list):
-            raise Error('[Search Engine]: Reference must be a list')
-        if len(ref) == 0:
-            #先考虑一个比较简单的情况:把浓度分成登长的4段，产生一个随机序列
-            sample = [360, 1.0e6, 1.0e6, 1.0e6, 1.0e6]
-        else:
-            sample = ref
+        assert isinstance(ref, list)
+        #先考虑一个比较简单的情况:把浓度分成登长的4段，产生一个随机序列
+        sample = ref if ref else [preset, 1.0e6, 1.0e6, 1.0e6, 1.0e6]
         step = initstep
         #Search
         lastsample, lastvalue = ref, None
-        for count in range(10000):
-            if len(ref) == 0 and count == 0:
-                start = 1
-            else:
-                start = 0
+        count = 0
+        while not finished and count < 10000:
+            start = 0 if ref or count else 1
             for i in range(start,5):
+                #Broadcast sample
                 sample = mpi_comm.bcast(sample, root=0)
-                #step = mpi_comm.bcast(step, root=0)
-                if len(ref) == 0 or i == 0:
-                    sample, value = self.search_best(sample, i, step, mpi=True)
+                #Because we use ALOHA first, so release won't last longer than 1 hour.
+                #Always use external routing to search time [4,360]
+                if i == 0:
+                    srange = range(4,361,step[0])
+                    sublist = srange[mpi_rank:len(srange):mpi_size]
+                    #print "Node:", mpi_rank, "sublist=", sublist
+                    minsample, minvalue = self.search_best(sample, i, step, sublist)
+                    if mpi_rank == 0: #Master Node              
+                        #收集所有值中的最小值               
+                        self.samplerlog.debug("[Node %d]: Sample is %s" % (mpi_rank, str(sample)))
+                        for rank in range(1, mpi_size):
+                            rsample, rvalue = mpi_comm.recv(source=rank, tag=10)
+                            if rvalue < minvalue:
+                                minsample = rsample
+                                minvalue = rvalue
+                            sample, value = minsample, minvalue
+                    else:    #Slave Node
+                        mpi_comm.send((minsample, minvalue), dest=0, tag=10)
                 else:
-                    srange = []
-                    istart = max(0, sample[i] - 40.0*step[1])
-                    iend = sample[i] + 40.0*step[1]
-                    assert iend >= istart
-                    while istart < iend:
-                        srange += [istart]
-                        istart += step[1]
-                    srange += [iend]
-                    #if __debug__: print "[Node %d]: srange is %s" % (mpi_rank, str(srange))
-                    if mpi_size == 1: #NO MPI
-                        sample, value = self.search_best(sample, i, step, srange)
-                    else:             #USE MPI
-                        #Broadcast sample
-                        if __debug__ and mpi_rank == 0: print "[Node %d]: Sample is %s" % (mpi_rank, str(sample))
+                    if not ref:
+                        sample, value = self.search_best(sample, i, step, mpi=True)
+                    else:   #USE MPI
+                        srange = numpy.arange(max(0, sample[i]-40*step[1]), sample[i]+40*step[1], step[1]).tolist()
+                        sublist = srange[mpi_rank:len(srange):mpi_size]
+                        self.mpilog.debug("[Node %d] sublist=%s " % (mpi_rank, sublist))
+                        minsample, minvalue = self.search_best(sample, i, step, sublist)
                         if mpi_rank == 0: #Master Node
-                            sublist = dict()
-                            subsize = len(srange) // mpi_size
-                            for rank in range(1, mpi_size):
-                                #mpi_comm.send(srange[rank*subsize:(rank+1)*subsize],dest=rank,tag=11)
-                                sublist[rank] = srange[rank*subsize:(rank+1)*subsize]
-                            #把剩余的数据都放到最后一个节点上
-                            #mpi_comm.send(srange[(mpi_size-1)*subsize:], dest=mpi_size-1, tag=11)
-                            rank1 = 1
-                            for data in srange[mpi_size*subsize:]:
-                                sublist[rank1] += [data]
-                                rank1 += 1
-                            for rank in range(1,mpi_size):
-                                mpi_comm.send(sublist[rank], dest=rank, tag=11)
-                            #计算属于自己节点的工作
-                            if __debug__: print "[Node %d] search range is %s" % (mpi_rank, srange[0:subsize])
-                            minsample, minvalue = self.search_best(sample, i, step, srange[0:subsize])
                             #收集所有值中的最小值
+                            self.samplerlog.debug("[Node %d]: Sample is %s" % (mpi_rank, str(sample)))
                             for rank in range(1, mpi_size):
                                 rsample, rvalue = mpi_comm.recv(source=rank, tag=10)
                                 if rvalue < minvalue:
                                     minsample = rsample
                                     minvalue = rvalue
                             sample, value = minsample, minvalue
-                        else:           #Slave Node
-                            sub_srange = mpi_comm.recv(source=0, tag=11)
-                            #if __debug__: print "[Node %d] search range is %s" % (mpi_rank, sub_srange)
-                            #if __debug__: print "[Node %d] step = %s" % (mpi_rank, step)
-                            mpi_comm.send(self.search_best(sample, i, step, sub_srange), dest=0, tag=10)
-                if mpi_rank == 0: print "[Direct Test]: Step count %d, Position %d -> Sample %s" % (count, i, str(sample))
+                        else:    #Slave Node
+                            mpi_comm.send((minsample, minvalue), dest=0, tag=10)
+                if mpi_rank == 0:
+                    self.samplerlog.warning("[Direct Test]: Step count %d, Position %d -> Sample=%s, value=%g" % (count, i, str(sample), value))
                 mpi_comm.barrier()
                 #在一般的情况下value是只要比较value就可以了，很少有sample不同但是value相同的情况，不过这里还是比较了sample
-                if mpi_rank == 0:
-                    if lastsample == sample and i == 0:
-                        if len(ref) == 0: finished = True
+                if mpi_rank == 0 and i == 0:
+                    if lastvalue == value:
+                        if not ref:
+                            finished = True
                         else:
                             step = self.narrowdown(step)
-                            print "[Reverse Engine] Downscale search step =", step
+                            self.samplerlog.info("[Reverse Engine] Downscale search step =" + str(step))
                             if step == (-1, -1):
-                                print "[Reverse Engine] Search Finished"
+                                self.samplerlog.info("[Reverse Engine] Search Finished")
                                 finished = True
-                    if i == 0: lastsample, lastvalue = sample, value
+                    lastsample, lastvalue = sample, value
                 finished = mpi_comm.bcast(finished, root=0)
                 if finished: break
             #the outter loop
-            if finished: break
-        if len(ref) == 0:
-            return sample
-        else:
+            count += 1
+        if ref:
+            sample, value = mpi_comm.bcast((sample, value), root=0)
             return sample, value
+        else:
+            sample = mpi_comm.bcast(sample, root=0)
+            return sample
+        #if mpi_rank == 0:
+        #    return (sample, value) if ref else sample
+        #else:
+        #    return "No returnings from slave nodes"
 
 def init_mpi():
     global mpi_size, mpi_rank, mpi_comm
     mpi_comm = MPI.COMM_WORLD
     mpi_size = mpi_comm.size
     mpi_rank = mpi_comm.rank
-
-#=====================================================#
-def run_reverse():
-    """Main Program"""
-    init_mpi()
-    if global_settings.REVERSE > 0:
-        r = reverse_engine()
-        r.read_file_input()
-        #TODO: Step 1: 先通过无限制搜索搜索出一个参考量和参考步长
-
-        #Step 2: 通过参考量和参考步长搜进一步向内搜索
-        r.gibbs_test(ref=[18.0, 110000000.0, 61000000.0, 362000000.0, 77000000.0], initstep=(1,1.0e6))
-
-if __name__ == "__main__":
-    run_reverse()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    assert mpi_size > 1
 

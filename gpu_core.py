@@ -1,6 +1,4 @@
 import os
-os.environ["CUDA_DEVICE"] = "0"
-os.environ["CUDA_PROFILE"] = "1"
 
 import numpy
 
@@ -63,5 +61,8 @@ def run_gpu_conc(pos, diffc, mass, height, GRID_WIDTH, gridw, smoke_count):
     get_gpu_conc(drv.Out(dest), drv.In(pos), drv.In(diffc), drv.In(mass), numpy.float32(height), numpy.int32(GRID_WIDTH), numpy.int32(gridw), numpy.int32(smoke_count),
                  block=(block_size,block_size,1), grid=(GRID_WIDTH / block_size,GRID_WIDTH / block_size))
     return dest
+
+if __name__ == '__main__':
+    print "compile"
 
 
